@@ -328,6 +328,39 @@
             font-size: 0.9em;
         }
 
+        /* Review button (fixed top-right) */
+        #openReviewBtn {
+            position: fixed;
+            top: 18px;
+            right: 18px;
+            z-index: 1200;
+            display: none;
+            padding: 10px 14px;
+            border-radius: 12px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+        }
+        /* Review panel overlay */
+        #reviewPanel {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            width: 360px;
+            max-height: calc(100vh - 120px);
+            overflow: auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+            padding: 12px;
+            z-index: 1300;
+            display: none;
+        }
+        #reviewPanel h3 { margin: 6px 0 10px 0; font-size: 1.05em; color:#333; }
+        .review-item { padding:8px; border-bottom:1px solid #f0f4ff; display:flex; gap:8px; align-items:center; }
+        .review-item .meta { flex:1; font-size:0.95em; }
+        .review-item .meta .rus { font-weight:600; color:#764ba2; }
+        .review-item .meta .kor { color:#2e7d32; font-size:0.92em; }
+        .review-action { display:flex; gap:6px; }
+
         @keyframes fadeInDown {
             from { opacity: 0; transform: translateY(-50px); }
             to { opacity: 1; transform: translateY(0); }
@@ -398,6 +431,7 @@
 </head>
 <body>
     <div class="container">
+        <button id="openReviewBtn" class="btn" onclick="showReviewPanel()">📝 Từ trả lời sai</button>
         <div class="header">
             <h1>Тrắc nghiệm từ vựng tiếng Nga</h1>
             <p>Nâng cao kỹ năng từ vựng tiếng Nga của bạn một cách thú vị!</p>
@@ -503,6 +537,17 @@
                     </div>
                 </div>
             </div>
+            <!-- Review Panel (floating) -->
+            <div id="reviewPanel" aria-hidden="true">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3>📝 Danh sách từ sai</h3>
+                    <div>
+                        <button class="btn btn-success" onclick="clearAllReview()" style="padding:6px 10px">Xóa tất cả</button>
+                        <button class="btn btn-secondary" onclick="hideReviewPanel()" style="padding:6px 10px; margin-left:6px">Đóng</button>
+                    </div>
+                </div>
+                <div id="reviewListContainer" style="margin-top:8px;"></div>
+            </div>
         </div>
     </div>
 
@@ -516,6 +561,114 @@
         let wrongAnswers = [];
         let selectedChapters = [];
 
+// New persistent review store
+const REVIEW_KEY = 'tuvung_review_v1';
+let reviewList = loadReviewList();
+
+function loadReviewList() {
+    try {
+        const s = localStorage.getItem(REVIEW_KEY);
+        return s ? JSON.parse(s) : [];
+    } catch (e) { return []; }
+}
+function saveReviewList() {
+    try { localStorage.setItem(REVIEW_KEY, JSON.stringify(reviewList)); } catch (e) {}
+}
+function makeId(){ return Date.now().toString(36) + Math.floor(Math.random()*1000).toString(36); }
+
+/* Add or update an entry when user trả lời sai */
+function addPersistentWrong({ russian, correct, selected }) {
+    const key = russian + '||' + correct;
+    const now = Date.now();
+    const idx = reviewList.findIndex(it => (it.russian + '||' + it.correct) === key);
+    if (idx >= 0) {
+        const it = reviewList[idx];
+        it.count = (it.count || 1) + 1;
+        it.selected = selected;
+        it.lastSeen = now;
+        it.known = false;
+        // move to front
+        reviewList.splice(idx, 1);
+        reviewList.unshift(it);
+    } else {
+        reviewList.unshift({
+            id: makeId(),
+            russian, correct, selected,
+            count: 1,
+            firstSeen: now,
+            lastSeen: now,
+            known: false
+        });
+    }
+    saveReviewList();
+    // show review button if at least one item
+    const openBtn = document.getElementById('openReviewBtn');
+    if (openBtn) openBtn.style.display = reviewList.length ? 'inline-block' : 'none';
+}
+
+/* Render review panel */
+function renderReviewList() {
+    const container = document.getElementById('reviewListContainer');
+    if (!container) return;
+    if (reviewList.length === 0) {
+        container.innerHTML = '<div style="text-align:center; color:#666;">Không có từ nào trong danh sách.</div>';
+        return;
+    }
+    let html = '';
+    reviewList.forEach(it => {
+        const t = new Date(it.lastSeen).toLocaleString();
+        html += `<div class="review-item" data-id="${it.id}">
+            <div class="meta">
+                <div class="rus">${escapeHtml(it.russian)}</div>
+                <div class="kor">✓ ${escapeHtml(it.correct)} · Bạn: ${escapeHtml(it.selected)} · ${it.count}×</div>
+                <div style="font-size:0.8em; color:#888;">${t}</div>
+            </div>
+            <div class="review-action">
+                <button class="btn" onclick="markAsKnown('${it.id}')" title="Đã thuộc">Đã thuộc</button>
+                <button class="btn btn-secondary" onclick="removeReviewItem('${it.id}')" title="Xóa">Xóa</button>
+            </div>
+        </div>`;
+    });
+    container.innerHTML = html;
+}
+
+/* Mark item as known (remove from list) */
+function markAsKnown(id) {
+    reviewList = reviewList.filter(i => i.id !== id);
+    saveReviewList();
+    renderReviewList();
+}
+
+/* Remove single item */
+function removeReviewItem(id) {
+    reviewList = reviewList.filter(i => i.id !== id);
+    saveReviewList();
+    renderReviewList();
+}
+
+/* Clear all review items */
+function clearAllReview() {
+    if (!confirm('Xóa toàn bộ danh sách từ sai?')) return;
+    reviewList = [];
+    saveReviewList();
+    renderReviewList();
+    hideReviewPanel();
+}
+
+/* Show/hide panel */
+function showReviewPanel() {
+    renderReviewList();
+    const panel = document.getElementById('reviewPanel');
+    if (panel) panel.style.display = 'block';
+}
+function hideReviewPanel() {
+    const panel = document.getElementById('reviewPanel');
+    if (panel) panel.style.display = 'none';
+}
+
+/* escape helper */
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
         // Data file names - update this array when adding new files
         const dataFiles = [
             'Chuong1.txt',
@@ -526,6 +679,10 @@
             'Baitap3.txt',
             'Chuong4.txt',
             'Baitap4.txt',
+            'Chuong5.txt',
+            'Baitap5.txt',
+            'Chuong6.txt',
+            'Baitap6.txt',
             'Chuong7.txt'
             // Add more files as needed
         ];
@@ -579,6 +736,9 @@
                 fileList.style.display = 'block';
                 startQuizBtn.style.display = 'inline-block';
                 reloadBtn.style.display = 'inline-block';
+                // show review button if we have stored items
+                const openBtn = document.getElementById('openReviewBtn');
+                if (openBtn) openBtn.style.display = reviewList.length ? 'inline-block' : 'none';
                 startQuizBtn.classList.add('pulse');
                 setTimeout(() => startQuizBtn.classList.remove('pulse'), 600);
             } else {
@@ -669,26 +829,65 @@
 
         function startSelectedQuiz() {
             if (selectedChapters.length === 0) return;
-            
-            // Combine words from selected chapters
-            let allWords = [];
-            selectedChapters.forEach(chapter => {
-                allWords = allWords.concat(vocabularyData[chapter]);
-            });
-            
-            // Shuffle and select questions
-            allWords = shuffleArray(allWords);
-            currentQuiz = allWords.slice(0, Math.min(20, allWords.length));
-            
+            const MAX_QUESTIONS = 20;
+
+            // For single-chapter case (common), use that chapter's queue to get distinct words
+            // For multiple chapters, we distribute round-robin across their queues
+            let chosen = [];
+
+            if (selectedChapters.length === 1) {
+                const ch = selectedChapters[0];
+                chosen = getNextFromChapter(ch, Math.min(MAX_QUESTIONS, (vocabularyData[ch]||[]).length));
+            } else {
+                // round-robin across selected chapters to keep even distribution
+                let needed = Math.min(MAX_QUESTIONS, Object.values(selectedChapters).reduce((s, c) => s + (vocabularyData[c] ? vocabularyData[c].length : 0), 0));
+                let idx = 0;
+                while (chosen.length < needed) {
+                    const ch = selectedChapters[idx % selectedChapters.length];
+                    const next = getNextFromChapter(ch, 1);
+                    if (next.length > 0) chosen.push(next[0]);
+                    idx++;
+                    // break if all queues empty
+                    if (selectedChapters.every(c => !chapterQueues[c] || chapterQueues[c].length === 0) && chosen.length === 0) break;
+                }
+            }
+
+            currentQuiz = chosen.slice(0, MAX_QUESTIONS);
             currentQuestionIndex = 0;
             score = 0;
             wrongAnswers = [];
-            
+
             document.getElementById('totalQuestions').textContent = currentQuiz.length;
             document.getElementById('maxScore').textContent = currentQuiz.length;
-            
+
             showSection('quizSection');
             displayQuestion();
+        }
+
+        // New: per-chapter shuffled queues to ensure even distribution
+        const chapterQueues = {};
+
+        // Refill queue for a chapter (shuffle once and store)
+        function refillChapterQueue(chapter) {
+            const words = vocabularyData[chapter] ? [...vocabularyData[chapter]] : [];
+            chapterQueues[chapter] = shuffleArray(words);
+        }
+
+        // Get up to count distinct words from chapter queue (reshuffle if needed)
+        function getNextFromChapter(chapter, count) {
+            if (!chapterQueues[chapter] || chapterQueues[chapter].length === 0) {
+                refillChapterQueue(chapter);
+            }
+            const result = [];
+            while (result.length < count) {
+                if (chapterQueues[chapter].length === 0) {
+                    // exhausted: refill and continue to ensure coverage
+                    refillChapterQueue(chapter);
+                    if (chapterQueues[chapter].length === 0) break; // no words available
+                }
+                result.push(chapterQueues[chapter].shift());
+            }
+            return result;
         }
 
         function shuffleArray(array) {
@@ -767,11 +966,13 @@
                 document.getElementById('currentScore').textContent = score;
             } else {
                 optionElement.classList.add('incorrect');
-                wrongAnswers.push({
+                const wrongItem = {
                     russian: currentQuiz[currentQuestionIndex].russian,
                     correct: correctAnswer,
                     selected: selectedOption
-                });
+                };
+                wrongAnswers.push(wrongItem);
+                addPersistentWrong(wrongItem);
             }
             
             nextBtn.style.display = 'inline-block';
